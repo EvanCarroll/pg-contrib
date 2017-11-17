@@ -19,10 +19,6 @@
 
 use strict;
 use autodie qw(:all);
-use PgCommon qw(get_versions);
-
-use File::Spec ();
-use File::Path ();
 
 # XXX - Remove this
 use lib 'lib';

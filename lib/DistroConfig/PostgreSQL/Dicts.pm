@@ -5,7 +5,9 @@ use warnings;
 use autodie qw(:all);
 
 use PgCommon qw(get_versions);
+
 use File::Basename ();
+use File::Spec     ();
 
 use Exporter 'import';
 

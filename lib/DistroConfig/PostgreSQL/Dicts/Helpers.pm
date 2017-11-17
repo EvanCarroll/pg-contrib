@@ -3,7 +3,7 @@ use strict;
 use warnings;
 use autodie qw(:all);
 
-use File::Basename ();
+use File::Spec ();
 
 use Exporter 'import';
 
