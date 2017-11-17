@@ -67,7 +67,7 @@ sub encode_to_utf8 {
 		print $fh_output $_ while <$fh_input>;
 		close $fh_output;
 		if ( $opts->{chmod} ) {
-			chmod 0644, $output_file;
+			chmod $opts->{chmod}, $output_file;
 		}
 	};
 	if ($@) {
