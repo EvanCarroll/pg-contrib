@@ -20,145 +20,26 @@
 use strict;
 use autodie qw(:all);
 use PgCommon qw(get_versions);
-use File::Spec     ();
-use File::Basename ();
-use File::Path     ();
 
-use constant {
-	CACHEDIR => '/var/cache/postgresql/dicts',
-	SHAREDIR => '/usr/share/postgresql'
-};
+use File::Spec ();
+use File::Path ();
 
-my @srcdirs = ('/usr/share/hunspell', '/usr/share/myspell/dicts');
+# XXX - Remove this
+use lib 'lib';
 
-# keep track of all up to date files, so that we can clean up cruft
-# managed by us
-# { file => 1 }
-my %skip_removal;
+use DistroConfig::PostgreSQL::Dicts qw(
+	install_to_pg_share
+	cleanup
+);
 
 if ( $< != 0 ) {
 	die "[$0] This script must be run as root\n"; 
 }
 
-unless ( -x CACHEDIR ) {
-	File::Path::make_path(CACHEDIR, {chmod=>0755, verbose=>1});
-}
+install_to_pg_share;
+cleanup;
 
-# determine encoding of an .aff file
-sub get_encoding_aff_file($) {
-	my $file = $_[0];	
-	open (my $fh, '<', $file);
-	while (<$fh>) {
-		if (/^SET ([\w-]+)\s*$/) { return $1; }
-	}
-	warn "[$0] No encoding defined in $file\n";
-	return 0;
-}
-
-## No iconv needed.
-sub encode_to_utf8 {
-	my ( $input_file, $output_file, $opts ) = @_;
-	ref $opts eq 'HASH'
-		or die "[$0] encode_to_utf8 requires a hashref opts argument";
-	eval {
-		use warnings FATAL => qw(utf8);
-		open ( my $fh_input,  "<:encoding($opts->{encoding})",  $input_file );
-		open ( my $fh_output, ">:encoding(utf-8)",              $output_file );
-		print $fh_output $_ while <$fh_input>;
-		close $fh_output;
-		if ( $opts->{chmod} ) {
-			chmod $opts->{chmod}, $output_file;
-		}
-	};
-	if ($@) {
-		warn "[$0] Conversion of $input_file failed\n\t$@\n";
-		return 0;
-	}
-	return 1;
-}
-
-print "Building PostgreSQL dictionaries from installed myspell/hunspell packages...\n";
-
-for my $dir (@srcdirs) {
-	for my $file (glob "$dir/*.aff") {
-		my $file_aff = $file;
-		( my $file_dic = $file_aff ) =~ s/\.aff$/\.dic/;
-
-		unless ( -f $file_dic ) {
-			warn "[$0] $file_aff does not have corresponding '.dict', ignoring set\n";
-			next;
-		}
-		
-		my $enc = get_encoding_aff_file($file_aff);
-		next unless $enc;
-		my ($locale) = lc( File::Basename::fileparse($file_aff, '.aff') );
-		
-		my $file_cache_affix = File::Spec->catfile(CACHEDIR, "$locale.affix"),
-		my $file_cache_dict =  File::Spec->catfile(CACHEDIR, "$locale.dict"),
-		
-		# convert to UTF-8 and write to cache dir
-		print "\t$locale\n";
-		my $opts = {chmod=>0644, encoding=>$enc};
-		encode_to_utf8( $file_aff, $file_cache_affix, $opts ) or next;
-		encode_to_utf8( $file_dic, $file_cache_dict,  $opts ) or next;
-
-		$skip_removal{$file_cache_affix} = 1;
-		$skip_removal{$file_cache_dict}  = 1;
-		
-		# install symlinks to all versions >= 8.3
-		foreach my $v (get_versions) {
-			next if $v < '8.3';
-
-			my $dest = File::Spec->catdir( SHAREDIR, $v, 'tsearch_data' );
-			if ( ! -d $dest ) {
-				## WARNING THIS RETURNS PSQL VERSIONS NOT SERVER VERSIONS
-				## warn "[$0] $dest unable to proceed with tsearch installation for $v\n";
-				next;
-			}
-
-			my $file_pgdest_affix = File::Spec->catfile( $dest, "$locale.affix" );
-			my $file_pgdest_dict  = File::Spec->catfile( $dest, "$locale.dict"  );
-
-			$skip_removal{ $file_pgdest_affix } = 1;
-			$skip_removal{ $file_pgdest_dict  } = 1;
-
-			## If they're not both links we don't symlink anything
-			if (
-				-e $file_pgdest_affix    && ! -l $file_pgdest_affix
-				or -e $file_pgdest_dict  && ! -l $file_pgdest_dict
-			) {
-				warn "[$0] Skipping install for $locale, user-modification detected\n";
-				next;
-			}
-
-			## If either are links, we nuke them
-			unlink $file_pgdest_affix if -e $file_pgdest_affix;
-			unlink $file_pgdest_dict  if -e $file_pgdest_dict;
-
-			## If the links don't exist, or were just nuked we install new links
-			symlink $file_cache_affix, $file_pgdest_affix;
-			symlink $file_cache_dict,  $file_pgdest_dict;
-		}
-
-	}
-}
-
-# clean up files for locales which do not exist any more
-print "Removing obsolete dictionary files:\n";
-foreach my $f ( glob (CACHEDIR."/*") ) {
-	next if $skip_removal{$f};
-	print "\t$f\n";
-	unlink $f;
-}
-foreach my $f (
-	glob(SHAREDIR."/*/tsearch_data/*.affix"),
-	glob(SHAREDIR."/*/tsearch_data/*.dict")
-) {
-	next unless -l $f;
-	next if $skip_removal{$f};
-	print "\t$f\n";
-	unlink $f;
-}
+1;
 
 __END__
 
