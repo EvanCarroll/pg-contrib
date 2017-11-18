@@ -18,7 +18,12 @@ our @EXPORT_OK = qw(
 	&get_encoding_aff_file
 	&encode_to_utf8
 	&copy_to_utf8_cache
+	&download_stopwords_to_utf8_cache
+	&scan_ispell
 );
+
+use LWP;
+use URI;
 
 ##
 ## These functions do *not* modify their arguments
@@ -27,12 +32,42 @@ our @EXPORT_OK = qw(
 ## None of them print to the screen for success
 ##
 
+#
+# We ut8ify here because we are stateful this is the overview of the valid
+# locales for PostgreSQL -- can't uf8ify, you're not valid (for pg purposes)
+#
+sub scan_ispell() {
+	my @ispell_locations = ('/usr/share/hunspell', '/usr/share/myspell/dicts');
+
+	my @locales;
+	for my $dir (@ispell_locations) {
+		for my $file (glob "$dir/*.aff") {
+			my $file_aff = $file;
+			( my $file_dic = $file_aff ) =~ s/\.aff$/\.dic/;
+
+			my ($locale) = lc( File::Basename::fileparse($file_aff, '.aff') );
+
+			unless ( -f $file_dic ) {
+				warn "[$0] $locale lacks a '.dict', user-modification detected. ignoring\n";
+				next;
+			}
+
+			push @locales, {
+				locale => $locale,
+				affix  => $file_aff,
+				dict   => $file_dic
+			};
+		}
+	}
+	return \@locales;
+}
+
 sub copy_to_utf8_cache($) {
 	my $locale = $_[0];
 
-	my $enc = get_encoding_aff_file($locale->{aff});
+	my $enc = get_encoding_aff_file($locale->{affix});
 	unless ( $enc ) {
-		warn "[$0] Unable to find encoding in $locale->{aff}, skipping";
+		warn "[$0] Unable to find encoding in '$locale->{affix}', skipping";
 		return 0;
 	}
 	
@@ -41,13 +76,35 @@ sub copy_to_utf8_cache($) {
 
 	# convert to UTF-8 and write to cache dir
 	my $opts = {chmod=>0644, encoding=>$enc};
-	encode_to_utf8( $locale->{aff}, $file_cache_affix, $opts ) or next;
-	encode_to_utf8( $locale->{dic}, $file_cache_dict,  $opts ) or next;
+	encode_to_utf8( $locale->{affix}, $file_cache_affix, $opts ) or next;
+	encode_to_utf8( $locale->{dict},  $file_cache_dict,  $opts ) or next;
 
 	return {
+		locale=> $locale->{locale},
 		affix => $file_cache_affix,
 		dict  => $file_cache_dict
 	};
+
+}
+
+sub download_stopwords_to_utf8_cache($) {
+	my $locale = $_[0];
+
+	$locale->{locale} =~ /^([^_]*)/;
+	my $lang = $1;
+
+	my $file_cache_stop = File::Spec->catfile(PG_CACHEDIR, "$locale->{locale}.stop");
+
+	my $ua = LWP::UserAgent->new();
+	my $resp = $ua->mirror(
+		URI->new(
+			"https://raw.githubusercontent.com/stopwords-iso/stopwords-$lang/master/stopwords-$lang.txt"
+		),
+		$file_cache_stop
+	);
+	chmod 0644, $file_cache_stop;
+
+	return $resp->is_success ? $file_cache_stop : 0;
 
 }
 
